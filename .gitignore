@@ -1,0 +1,127 @@
+# Ruby
+*.gem
+*.rbc
+/.config
+/coverage/
+/InstalledFiles
+/pkg/
+/spec/reports/
+/spec/examples.txt
+/test/tmp/
+/test/version_tmp/
+/tmp/
+
+# Documentation
+/.yardoc/
+/_yardoc/
+/doc/
+/rdoc/
+
+# Environment
+/.bundle/
+/vendor/bundle
+/lib/bundler/man/
+.env
+.env.local
+.envrc.local
+
+# Gemfile.lock - include for applications, exclude for gems
+# Gemfile.lock
+
+# RVM/rbenv
+.rvmrc
+.ruby-version
+.ruby-gemset
+.tool-versions
+
+# Logs and databases
+/logs/*.log
+/logs/*.fifo
+*.log
+*.sql
+*.sqlite
+*.sqlite3
+*.db
+
+# Workspace (sandboxed file operations)
+/workspace/*
+!/workspace/.gitkeep
+
+# Sessions
+/sessions/*
+!/sessions/.gitkeep
+~/.gemini_repl/
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+*~
+*.swp
+*.swo
+
+# IDE files
+/.idea/
+/.vscode/
+*.iml
+.project
+.classpath
+.settings/
+*.sublime-project
+*.sublime-workspace
+
+# Testing
+/spec/fixtures/workspace/*
+!/spec/fixtures/workspace/.gitkeep
+.rspec_status
+
+# Profiling
+/profiles/
+*.prof
+*.stackprof
+
+# Build artifacts
+/build/
+/dist/
+/out/
+
+# Core dumps
+*.core
+core
+core.*
+
+# Backup files
+*.bak
+*.backup
+*#
+.#*
+
+# Temporary files
+*.tmp
+*.temp
+.cache/
+
+# macOS
+.AppleDouble
+.LSOverride
+Icon
+*.icloud
+
+# Linux
+.directory
+.Trash-*
+.nfs*
+
+# Windows
+Desktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
+*.lnk
