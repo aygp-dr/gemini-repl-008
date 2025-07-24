@@ -1,0 +1,478 @@
+#+TITLE: Gemini REPL 008 (Ruby) - System Requirements Specification
+#+AUTHOR: AYGP-DR Team
+#+DATE: 2025-07-24
+#+OPTIONS: toc:3 num:t
+
+* Overview
+
+This document defines the comprehensive requirements for gemini-repl-008, a Ruby implementation of the Gemini REPL with AI integration. It is adapted from the Clojure/Babashka version (gemini-repl-006) and maintains compatibility with the core architecture while leveraging Ruby's strengths.
+
+** Document Purpose
+
+This specification guides the Ruby implementation, incorporating lessons from:
+- gemini-repl-005 (Python implementation)
+- gemini-repl-006 (Clojure/Babashka implementation)
+- Previous versions' architectural patterns
+
+** Key Design Principles
+
+1. *Ruby Idiomatic Code* - Leverage Ruby's expressive syntax and conventions
+2. *Fast Startup* - Minimize boot time for CLI responsiveness
+3. *Security by Default* - Sandbox all operations from the start
+4. *Observable System* - Comprehensive logging and metrics
+5. *Test-Driven* - RSpec/Minitest with high coverage
+6. *Documentation as Code* - YARD documentation throughout
+
+* Core System Requirements
+
+** API Client Specifications
+
+*** Gemini API Integration
+- MUST support Gemini API v1beta endpoints
+- MUST handle both streaming and batch response modes
+- MUST implement proper error handling with retries
+- MUST track token usage and cost estimation
+- SHOULD support model switching via configuration
+- SHOULD use Faraday or similar for HTTP abstraction
+
+*** Request/Response Handling
+#+begin_src ruby
+# Expected API contract
+{
+  endpoint: "https://generativelanguage.googleapis.com/v1beta",
+  model: "gemini-2.0-flash-exp",  # configurable
+  auth: { api_key: ENV["GEMINI_API_KEY"] },
+  timeout: 30,  # seconds
+  retry: {
+    max_attempts: 3,
+    backoff: [1.0, 2.0, 4.0]  # seconds
+  }
+}
+#+end_src
+
+*** Ruby Implementation Considerations
+- Use modules for provider abstraction (mixins)
+- Implement response streaming with Enumerator
+- Design message format using Struct or OpenStruct
+- Consider using dry-rb gems for configuration
+- Leverage Ruby's method_missing for dynamic tool dispatch
+
+** Context Management
+
+*** Conversation History
+- MUST persist conversations in JSON or YAML format
+- MUST support session resume functionality
+- MUST implement token window management with pruning
+- MUST track message roles (user/assistant/system)
+- SHOULD maintain metadata (timestamps, tokens, costs)
+- SHOULD use Ruby's Marshal for fast serialization
+
+*** Token Management Strategy
+#+begin_example
+Maximum Context: 32,768 tokens (configurable)
+Pruning Strategy: Remove oldest messages when 90% full
+Reserved Tokens: 2,048 for system prompts
+Implementation: Use tiktoken Ruby binding or custom counter
+#+end_example
+
+*** Ruby-Specific Considerations
+- Use Ruby's Queue for thread-safe message handling
+- Implement context as a class with Enumerable
+- Consider using Redis for larger context storage
+- Leverage Ruby's built-in JSON/YAML parsers
+
+** CLI Interface Specifications
+
+*** Command Line Arguments
+#+begin_src bash
+# Required interface
+gemini-repl [OPTIONS] [PROMPT]
+
+OPTIONS:
+  -h, --help         Show help information
+  -v, --version      Show version information
+  -p, --print        Print mode (non-interactive)
+  -n, --name NAME    Named session for persistence
+  -c, --config FILE  Configuration file path
+  -m, --model MODEL  Override default model
+  --debug            Enable debug logging
+  --no-color         Disable colored output
+  --format FORMAT    Output format (text, json, yaml)
+#+end_src
+
+*** Ruby CLI Implementation
+- Use OptionParser or Thor for argument parsing
+- Implement with Ruby's built-in Logger
+- Use Readline for interactive input
+- Leverage colorize or similar for colored output
+- Consider using TTY toolkit for rich CLI features
+
+** Interactive REPL Features
+
+*** Core Commands
+#+begin_example
+/help         - Display available commands
+/exit, /quit  - Exit the REPL
+/clear        - Clear screen
+/context      - Show conversation context
+/stats        - Display usage statistics
+/save [file]  - Save conversation
+/load [file]  - Load conversation
+/tools        - List available tools
+/workspace    - Show workspace contents
+/debug        - Toggle debug mode
+/prompt       - Configure prompt style
+/version      - Show version information
+/reload       - Reload configuration
+/history      - Show command history
+#+end_example
+
+*** Ruby REPL Implementation
+- Use IRB as a base or implement custom with Readline
+- Implement command pattern for slash commands
+- Use Ruby's method dispatch for command routing
+- Store history in ~/.gemini_repl_history
+- Support tab completion for commands and files
+
+** Tool Calling Architecture
+
+*** Function Definitions
+#+begin_src ruby
+{
+  name: "read_file",
+  description: "Read contents of a file",
+  parameters: {
+    type: "object",
+    properties: {
+      path: {
+        type: "string",
+        description: "File path relative to workspace"
+      }
+    },
+    required: ["path"]
+  },
+  # Ruby-specific additions:
+  validator: ->(params) { File.exist?(params[:path]) },
+  implementation: ReadFileTool
+}
+#+end_src
+
+*** Security Constraints
+- MUST use Ruby's Dir.chroot or similar for sandboxing
+- MUST validate all inputs with strong typing
+- MUST log all tool executions
+- MUST implement rate limiting with middleware
+- SHOULD use Ruby's taint checking mechanism
+- SHOULD implement capability-based security
+
+*** Available Tools (v0.1.0)
+1. read_file - Read file contents
+2. write_file - Write file contents  
+3. list_files - List directory contents
+4. execute_code - Run Ruby code (sandboxed)
+5. shell_exec - Execute shell commands (restricted)
+
+*** Ruby Tool Implementation
+- Each tool as a separate class in Tools module
+- Use Module.prepend for security wrapping
+- Implement dry-run mode with Ruby's pretend pattern
+- Use Ruby's Observable module for event emission
+- Consider using Contracts gem for runtime checking
+
+** Logging Specifications
+
+*** Log Format
+#+begin_src ruby
+{
+  timestamp: Time.now.iso8601(3),
+  level: :info,  # :debug, :info, :warn, :error, :fatal
+  event: "event-name",
+  data: {},
+  error: "error message if applicable",
+  trace_id: SecureRandom.uuid,
+  span_id: SecureRandom.uuid
+}
+#+end_src
+
+*** Ruby Logging Implementation
+- Use Ruby's Logger with custom formatter
+- Implement structured logging with JSON
+- Support multiple outputs (file, stdout, syslog)
+- Use Logger.new with log rotation
+- Consider using Semantic Logger for production
+
+*** Log Files
+- logs/gemini.log - Main application log
+- logs/gemini-debug.log - Debug-level logging
+- logs/tools/ - Per-tool execution logs
+- logs/sessions/ - Per-session logs
+
+** Performance Requirements
+
+*** Response Times
+- REPL startup: < 300ms (Ruby's fast startup)
+- Command execution: < 50ms
+- File operations: < 20ms
+- Context loading: < 100ms
+- Tool execution: < 500ms
+
+*** Ruby Performance Considerations
+- Use lazy loading for tools and features
+- Implement caching with Ruby's memoization
+- Use Fiber for concurrent operations
+- Consider JRuby or TruffleRuby for performance
+- Profile with ruby-prof and stackprof
+
+** Testing Requirements
+
+*** Test Framework
+- RSpec for BDD-style tests
+- Minitest for simpler unit tests
+- SimpleCov for coverage reporting
+- VCR for API interaction recording
+- Timecop for time-dependent tests
+
+*** Test Organization
+#+begin_example
+spec/
+├── gemini_repl/
+│   ├── core/         # Core functionality specs
+│   ├── tools/        # Tool implementation specs
+│   └── utils/        # Utility function specs
+├── integration/      # End-to-end tests
+├── performance/      # Performance benchmarks
+├── security/         # Security-specific tests
+└── support/          # Test helpers and fixtures
+#+end_example
+
+*** Ruby Testing Best Practices
+- Use shared examples for common behaviors
+- Implement factory pattern for test data
+- Mock external services with WebMock
+- Use RSpec's built-in matchers extensively
+- Maintain fixtures in spec/fixtures/
+
+** Build and Deployment
+
+*** Ruby-Specific Distribution
+1. RubyGems package (primary)
+2. Homebrew formula
+3. Docker container
+4. Standalone executable with ruby-packer
+5. AppImage for Linux
+6. Native packages (deb, rpm)
+
+*** Dependency Management
+- Use Bundler for dependency management
+- Lock versions in Gemfile.lock
+- Support Ruby 3.0+ (with version detection)
+- Minimize runtime dependencies
+- Use gemspec for package metadata
+
+* Ruby-Specific Requirements
+
+** Language Features to Leverage
+
+*** Metaprogramming
+- Use method_missing for dynamic command dispatch
+- Implement DSL for tool definitions
+- Use class_eval for runtime modifications
+- Leverage Ruby's open classes carefully
+
+*** Concurrency
+- Use Fiber for lightweight concurrency
+- Implement thread pool for tool execution
+- Use Mutex for shared state protection
+- Consider Ractor for true parallelism (Ruby 3.0+)
+
+*** Standard Library Usage
+- FileUtils for file operations
+- Net::HTTP or URI for web requests
+- JSON/YAML for serialization
+- Logger for logging
+- Readline for input handling
+
+** Ruby Patterns and Idioms
+
+*** Design Patterns
+#+begin_src ruby
+# Command Pattern for REPL commands
+class Command
+  attr_reader :name, :description
+  
+  def initialize(name, description, &block)
+    @name = name
+    @description = description
+    @executor = block
+  end
+  
+  def execute(context, *args)
+    @executor.call(context, *args)
+  end
+end
+
+# Module for tool mixing
+module Tool
+  def self.included(base)
+    base.extend(ClassMethods)
+  end
+  
+  module ClassMethods
+    def tool_name(name = nil)
+      @tool_name = name if name
+      @tool_name
+    end
+  end
+end
+#+end_src
+
+*** Error Handling
+- Use custom exception hierarchy
+- Implement Result pattern (success/failure)
+- Provide detailed error messages
+- Use ensure for cleanup
+- Consider dry-monads for functional error handling
+
+** Performance Optimization
+
+*** Ruby-Specific Optimizations
+- Use symbols instead of strings for keys
+- Freeze string literals
+- Implement lazy evaluation
+- Use StringIO for in-memory operations
+- Profile and optimize hot paths
+
+*** Memory Management
+- Implement object pooling for tools
+- Use weak references for caches
+- Clear large objects explicitly
+- Monitor memory with ObjectSpace
+- Consider memory_profiler gem
+
+* Implementation Roadmap
+
+** Phase 1: Foundation (Week 1)
+1. Project structure and configuration
+2. Basic REPL loop with Readline
+3. Command parsing and dispatch
+4. Logging infrastructure
+5. Initial test suite
+
+** Phase 2: API Integration (Week 2)
+1. Gemini API client with Faraday
+2. Response parsing and error handling
+3. Context management system
+4. Token counting implementation
+5. API mocking for tests
+
+** Phase 3: Tool System (Week 3)
+1. Tool protocol and registry
+2. File operation tools
+3. Security sandboxing
+4. Tool testing framework
+5. Documentation generation
+
+** Phase 4: Polish (Week 4)
+1. Session persistence
+2. Configuration system
+3. Performance optimization
+4. Package and distribution
+5. Comprehensive documentation
+
+* Acceptance Criteria
+
+** v0.1.0 Release (MVP)
+- [ ] Basic REPL with Ruby idioms
+- [ ] Gemini API integration working
+- [ ] Core slash commands implemented
+- [ ] File tools with sandboxing
+- [ ] 80%+ test coverage
+- [ ] YARD documentation complete
+- [ ] Gem package ready
+
+** v0.5.0 Release (Beta)
+- [ ] All tools implemented
+- [ ] Streaming support added
+- [ ] Performance targets met
+- [ ] Cross-platform tested
+- [ ] Plugin system designed
+- [ ] Production logging ready
+
+** v1.0.0 Release (Stable)
+- [ ] Security audit passed
+- [ ] Performance optimized
+- [ ] Full documentation
+- [ ] CI/CD pipeline complete
+- [ ] Distribution packages ready
+- [ ] Community feedback incorporated
+
+* Appendices
+
+** A. Configuration Schema
+#+begin_src yaml
+# config/gemini_repl.yml
+api:
+  key: <%= ENV['GEMINI_API_KEY'] %>
+  model: gemini-2.0-flash-exp
+  timeout: 30
+  retry:
+    max_attempts: 3
+    backoff: [1.0, 2.0, 4.0]
+
+context:
+  max_tokens: 32768
+  prune_threshold: 0.9
+  format: json  # or yaml, marshal
+
+logging:
+  level: info
+  file: logs/gemini.log
+  format: json
+  max_size: 10485760  # 10MB
+  max_files: 5
+
+workspace:
+  path: ./workspace
+  max_size_mb: 100
+  allowed_extensions: [.txt, .md, .rb, .yml, .json]
+
+tools:
+  enabled: [read_file, write_file, list_files]
+  timeout: 30
+  sandbox_level: strict
+
+repl:
+  prompt_style: contextual
+  history_size: 1000
+  auto_save: true
+  color: true
+#+end_src
+
+** B. Error Code Reference
+| Code | Description | User Action |
+|------+-------------+-------------|
+| E001 | API key missing | Set GEMINI_API_KEY |
+| E002 | Network timeout | Check connection |
+| E003 | Invalid response | Update gem version |
+| E004 | Context overflow | Clear context |
+| E005 | Tool failed | Check permissions |
+| E006 | Permission denied | Verify access |
+| E007 | Not found | Check resource |
+| E008 | Rate limited | Wait and retry |
+| E009 | Invalid config | Fix YAML syntax |
+| E010 | Unsupported | Feature unavailable |
+
+** C. Ruby-Specific Best Practices
+1. Follow Ruby Style Guide (Rubocop)
+2. Use semantic versioning
+3. Write self-documenting code
+4. Prefer composition over inheritance
+5. Test behavior, not implementation
+6. Keep methods small and focused
+7. Use meaningful variable names
+8. Avoid monkey patching stdlib
+9. Document with YARD syntax
+10. Profile before optimizing
+
+#+STARTUP: overview
+#+STARTUP: hidestars
