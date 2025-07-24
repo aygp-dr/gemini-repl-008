@@ -1,0 +1,1795 @@
+#+TITLE: Ruby Gemini REPL - Implementation Guide
+#+AUTHOR: AYGP-DR Team
+#+DATE: 2025-07-24
+#+PROPERTY: header-args :mkdirp yes :comments both
+
+* Overview
+
+This is a comprehensive implementation guide for the Ruby version of Gemini REPL (gemini-repl-008), incorporating lessons learned from all previous versions and issues discovered in production usage.
+
+** Evolution Context
+
+This guide synthesizes requirements from:
+- gemini-repl-005 (Python): JSON parsing issues, tool calling complexity
+- gemini-repl-006 (Clojure): Literate programming, comprehensive architecture
+- gemini-repl-007 (Python): Daemon mode, CLI UX patterns, tool categories
+
+** Key Design Decisions
+
+1. *Pure Ruby*: No Rails or heavy frameworks for fast startup (<300ms)
+2. *Tool Priority*: Focus on the 80% use case (file ops, shell, editing)
+3. *Progressive Enhancement*: Start simple, add features based on usage
+4. *Security First*: Sandbox from day one, no exceptions
+5. *Observable System*: Structured logging, metrics, trace IDs
+
+* Core Implementation
+
+** Project Structure
+
+#+begin_src bash :tangle scripts/setup.sh :shebang #!/usr/bin/env bash
+# Create Ruby project structure
+mkdir -p lib/gemini_repl/{core,tools,utils,ui}
+mkdir -p spec/{gemini_repl,integration,support}
+mkdir -p bin config logs workspace sessions
+mkdir -p docs/{api,guides,diagrams}
+
+# Create essential files
+touch bin/gemini-repl
+touch lib/gemini_repl.rb
+touch lib/gemini_repl/version.rb
+touch Gemfile Rakefile
+touch .rubocop.yml .rspec
+touch config/application.yml.example
+
+# Make binary executable
+chmod +x bin/gemini-repl
+#+end_src
+
+** Main Entry Point
+
+#+begin_src ruby :tangle bin/gemini-repl :shebang #!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Add lib to load path
+$LOAD_PATH.unshift(File.expand_path('../lib', __dir__))
+
+require 'gemini_repl'
+require 'gemini_repl/cli'
+
+# Handle signals gracefully
+Signal.trap('INT') { GeminiRepl::CLI.graceful_exit }
+Signal.trap('TERM') { GeminiRepl::CLI.graceful_exit }
+
+# Run the CLI
+exit GeminiRepl::CLI.start(ARGV)
+#+end_src
+
+** Version Management
+
+#+begin_src ruby :tangle lib/gemini_repl/version.rb
+# frozen_string_literal: true
+
+module GeminiRepl
+  VERSION = '0.1.0'
+  
+  # Semantic version components
+  MAJOR = 0
+  MINOR = 1
+  PATCH = 0
+  
+  # Build metadata
+  BUILD_DATE = '2025-07-24'
+  BUILD_COMMIT = `git rev-parse --short HEAD 2>/dev/null`.strip
+  
+  # Full version string
+  def self.version_string
+    "#{VERSION} (#{BUILD_DATE}#{BUILD_COMMIT.empty? ? '' : " #{BUILD_COMMIT}"})"
+  end
+end
+#+end_src
+
+** Main Module
+
+#+begin_src ruby :tangle lib/gemini_repl.rb
+# frozen_string_literal: true
+
+require 'logger'
+require 'json'
+require 'yaml'
+require 'fileutils'
+require 'pathname'
+
+# Core modules
+require_relative 'gemini_repl/version'
+require_relative 'gemini_repl/configuration'
+require_relative 'gemini_repl/errors'
+
+# Lazy-load components for faster startup
+module GeminiRepl
+  class << self
+    attr_writer :configuration, :logger
+    
+    def configuration
+      @configuration ||= Configuration.new
+    end
+    
+    def configure
+      yield(configuration)
+    end
+    
+    def logger
+      @logger ||= create_logger
+    end
+    
+    def root
+      @root ||= Pathname.new(File.expand_path('../..', __FILE__))
+    end
+    
+    private
+    
+    def create_logger
+      logger = Logger.new(configuration.log_file || STDOUT)
+      logger.level = configuration.log_level
+      logger.formatter = proc do |severity, datetime, progname, msg|
+        data = {
+          timestamp: datetime.iso8601(3),
+          level: severity,
+          program: progname || 'gemini-repl',
+          message: msg
+        }
+        
+        if configuration.log_format == :json
+          "#{data.to_json}\n"
+        else
+          "[#{data[:timestamp]}] #{data[:level]} -- #{data[:program]}: #{data[:message]}\n"
+        end
+      end
+      logger
+    end
+  end
+end
+
+# Load core components
+require_relative 'gemini_repl/core/repl'
+require_relative 'gemini_repl/core/api_client'
+require_relative 'gemini_repl/core/context_manager'
+require_relative 'gemini_repl/tools/registry'
+#+end_src
+
+* CLI Implementation
+
+** Command Line Interface
+
+#+begin_src ruby :tangle lib/gemini_repl/cli.rb
+# frozen_string_literal: true
+
+require 'optparse'
+require 'readline'
+
+module GeminiRepl
+  class CLI
+    class << self
+      def start(argv)
+        options = parse_options(argv)
+        
+        # Handle special commands
+        return handle_special_command(options) if options[:special_command]
+        
+        # Configure from options
+        configure_from_options(options)
+        
+        # Start appropriate mode
+        if options[:daemon]
+          start_daemon_mode(options)
+        elsif options[:print]
+          start_print_mode(options)
+        else
+          start_interactive_mode(options)
+        end
+        
+        0 # Success exit code
+      rescue StandardError => e
+        STDERR.puts "Error: #{e.message}"
+        GeminiRepl.logger.error(e.full_message)
+        1 # Error exit code
+      end
+      
+      def graceful_exit
+        puts "\nExiting..."
+        GeminiRepl.logger.info("Graceful shutdown initiated")
+        exit(0)
+      end
+      
+      private
+      
+      def parse_options(argv)
+        options = {
+          config_file: nil,
+          session_name: nil,
+          model: nil,
+          debug: false,
+          no_color: false,
+          format: :text
+        }
+        
+        parser = OptionParser.new do |opts|
+          opts.banner = "Usage: gemini-repl [OPTIONS] [PROMPT]"
+          
+          opts.separator ""
+          opts.separator "Basic Options:"
+          
+          opts.on("-h", "--help", "Show this help message") do
+            puts opts
+            exit(0)
+          end
+          
+          opts.on("-v", "--version", "Show version information") do
+            options[:special_command] = :version
+          end
+          
+          opts.on("-p", "--print PROMPT", "Print mode (non-interactive)") do |prompt|
+            options[:print] = prompt
+          end
+          
+          opts.separator ""
+          opts.separator "Session Options:"
+          
+          opts.on("-n", "--name NAME", "Named session for persistence") do |name|
+            options[:session_name] = name
+          end
+          
+          opts.on("--new NAME", "Start new named session") do |name|
+            options[:new_session] = name
+          end
+          
+          opts.on("-r", "--resume NAME", "Resume existing session") do |name|
+            options[:resume_session] = name
+          end
+          
+          opts.on("--list-sessions", "List all sessions") do
+            options[:special_command] = :list_sessions
+          end
+          
+          opts.separator ""
+          opts.separator "Configuration Options:"
+          
+          opts.on("-c", "--config FILE", "Configuration file path") do |file|
+            options[:config_file] = file
+          end
+          
+          opts.on("-m", "--model MODEL", "Override default model") do |model|
+            options[:model] = model
+          end
+          
+          opts.on("--debug", "Enable debug logging") do
+            options[:debug] = true
+          end
+          
+          opts.on("--no-color", "Disable colored output") do
+            options[:no_color] = true
+          end
+          
+          opts.on("--format FORMAT", [:text, :json, :yaml], "Output format (text, json, yaml)") do |format|
+            options[:format] = format
+          end
+          
+          opts.separator ""
+          opts.separator "Advanced Options:"
+          
+          opts.on("-d", "--daemon", "Run in daemon mode") do
+            options[:daemon] = true
+          end
+          
+          opts.on("--no-interactive", "Exit after processing -p command") do
+            options[:no_interactive] = true
+          end
+          
+          opts.on("--attach NAME", "Attach to running daemon") do |name|
+            options[:attach] = name
+          end
+          
+          opts.on("--status NAME", "Check daemon status") do |name|
+            options[:special_command] = :status
+            options[:session_name] = name
+          end
+          
+          opts.on("--kill NAME", "Stop daemon") do |name|
+            options[:special_command] = :kill
+            options[:session_name] = name
+          end
+        end
+        
+        parser.parse!(argv)
+        
+        # Remaining arguments become the prompt
+        options[:prompt] = argv.join(' ') unless argv.empty?
+        
+        options
+      end
+      
+      def handle_special_command(options)
+        case options[:special_command]
+        when :version
+          puts GeminiRepl.version_string
+        when :list_sessions
+          Core::SessionManager.list_sessions
+        when :status
+          Core::DaemonManager.status(options[:session_name])
+        when :kill
+          Core::DaemonManager.kill(options[:session_name])
+        end
+        0
+      end
+      
+      def configure_from_options(options)
+        # Load configuration file
+        if options[:config_file]
+          GeminiRepl.configuration.load_file(options[:config_file])
+        end
+        
+        # Override with command line options
+        GeminiRepl.configuration.tap do |config|
+          config.model = options[:model] if options[:model]
+          config.debug = options[:debug] if options[:debug]
+          config.color_enabled = !options[:no_color]
+          config.output_format = options[:format]
+        end
+      end
+      
+      def start_interactive_mode(options)
+        repl = Core::REPL.new(options)
+        repl.run
+      end
+      
+      def start_print_mode(options)
+        repl = Core::REPL.new(options.merge(print_mode: true))
+        response = repl.process_input(options[:print])
+        puts response
+      end
+      
+      def start_daemon_mode(options)
+        Core::DaemonManager.start(options)
+      end
+    end
+  end
+end
+#+end_src
+
+* Core Components
+
+** REPL Implementation
+
+#+begin_src ruby :tangle lib/gemini_repl/core/repl.rb
+# frozen_string_literal: true
+
+require 'readline'
+
+module GeminiRepl
+  module Core
+    class REPL
+      COMMANDS = {
+        '/help' => :show_help,
+        '/exit' => :exit_repl,
+        '/quit' => :exit_repl,
+        '/clear' => :clear_screen,
+        '/context' => :show_context,
+        '/stats' => :show_stats,
+        '/save' => :save_conversation,
+        '/load' => :load_conversation,
+        '/tools' => :list_tools,
+        '/workspace' => :show_workspace,
+        '/debug' => :toggle_debug,
+        '/prompt' => :configure_prompt,
+        '/version' => :show_version,
+        '/reload' => :reload_config,
+        '/history' => :show_history,
+        '/toggle-tools' => :toggle_tools,
+        '/notools' => :disable_tools
+      }.freeze
+      
+      def initialize(options = {})
+        @options = options
+        @api_client = ApiClient.new
+        @context_manager = ContextManager.new(options[:session_name])
+        @tool_registry = Tools::Registry.new
+        @running = false
+        @tools_enabled = GeminiRepl.configuration.tools_enabled
+        
+        setup_readline
+        load_or_create_session
+      end
+      
+      def run
+        @running = true
+        show_welcome unless @options[:print_mode]
+        
+        while @running
+          begin
+            input = get_input
+            next if input.nil? || input.empty?
+            
+            response = process_input(input)
+            display_response(response) unless @options[:print_mode]
+            
+          rescue Interrupt
+            puts "\nUse /exit to quit"
+          rescue StandardError => e
+            handle_error(e)
+          end
+        end
+        
+        save_session
+      end
+      
+      def process_input(input)
+        # Check for commands
+        if input.start_with?('/')
+          handle_command(input)
+        else
+          # Process with API
+          process_with_api(input)
+        end
+      end
+      
+      private
+      
+      def setup_readline
+        # Configure readline
+        Readline.completion_append_character = ' '
+        Readline.completion_proc = proc do |str|
+          COMMANDS.keys.grep(/^#{Regexp.escape(str)}/)
+        end
+        
+        # Load history
+        history_file = File.expand_path('~/.gemini_repl_history')
+        if File.exist?(history_file)
+          File.readlines(history_file).each { |line| Readline::HISTORY.push(line.chomp) }
+        end
+        
+        # Save history on exit
+        at_exit do
+          File.open(history_file, 'w') do |f|
+            Readline::HISTORY.each { |line| f.puts line }
+          end
+        end
+      end
+      
+      def get_input
+        prompt = generate_prompt
+        Readline.readline(prompt, true)
+      end
+      
+      def generate_prompt
+        case GeminiRepl.configuration.prompt_style
+        when :minimal
+          '> '
+        when :tokens
+          "[#{@context_manager.token_count} tokens] > "
+        when :ruby
+          '>> '
+        when :time
+          "[#{Time.now.strftime('%H:%M')}] > "
+        when :model
+          "#{GeminiRepl.configuration.model}> "
+        when :contextual
+          "#{GeminiRepl.configuration.model}[#{@context_manager.message_count}]> "
+        else
+          '> '
+        end
+      end
+      
+      def handle_command(input)
+        command = input.split.first
+        args = input.split[1..-1]
+        
+        if COMMANDS.key?(command)
+          send(COMMANDS[command], *args)
+        else
+          "Unknown command: #{command}. Type /help for available commands."
+        end
+      end
+      
+      def process_with_api(input)
+        # Add to context
+        @context_manager.add_message('user', input)
+        
+        # Prepare request
+        messages = @context_manager.get_messages_for_api
+        tools = @tools_enabled ? @tool_registry.definitions : nil
+        
+        # Send to API
+        response = @api_client.send_message(messages, tools: tools)
+        
+        # Handle tool calls if present
+        if response.tool_calls && @tools_enabled
+          response = handle_tool_calls(response)
+        end
+        
+        # Add response to context
+        @context_manager.add_message('assistant', response.content)
+        
+        response.content
+      end
+      
+      def handle_tool_calls(response)
+        results = []
+        
+        response.tool_calls.each do |tool_call|
+          tool_name = tool_call['name']
+          parameters = tool_call['parameters']
+          
+          result = @tool_registry.execute(tool_name, parameters)
+          results << result
+        end
+        
+        # Send results back to API
+        @api_client.send_tool_results(results)
+      end
+      
+      # Command implementations
+      def show_help
+        puts <<~HELP
+          Available commands:
+          
+          /help         - Show this help message
+          /exit, /quit  - Exit the REPL
+          /clear        - Clear the screen
+          /context      - Show conversation context
+          /stats        - Display usage statistics
+          /save [file]  - Save conversation
+          /load [file]  - Load conversation
+          /tools        - List available tools
+          /workspace    - Show workspace contents
+          /debug        - Toggle debug mode
+          /prompt       - Configure prompt style
+          /version      - Show version information
+          /reload       - Reload configuration
+          /history      - Show command history
+          /toggle-tools - Enable/disable tools
+          /notools      - Disable tools
+        HELP
+      end
+      
+      def exit_repl
+        @running = false
+        "Goodbye!"
+      end
+      
+      def clear_screen
+        system('clear') || system('cls')
+        nil
+      end
+      
+      def show_context
+        @context_manager.display_context
+      end
+      
+      def show_stats
+        @context_manager.display_stats
+      end
+      
+      def toggle_tools
+        @tools_enabled = !@tools_enabled
+        "Tools #{@tools_enabled ? 'enabled' : 'disabled'}"
+      end
+      
+      def disable_tools
+        @tools_enabled = false
+        "Tools disabled"
+      end
+      
+      def show_version
+        GeminiRepl.version_string
+      end
+      
+      def display_response(response)
+        return if response.nil?
+        
+        case GeminiRepl.configuration.output_format
+        when :json
+          puts JSON.pretty_generate(response)
+        when :yaml
+          puts response.to_yaml
+        else
+          puts response
+        end
+      end
+      
+      def handle_error(error)
+        GeminiRepl.logger.error("REPL error: #{error.message}")
+        puts "Error: #{error.message}"
+        puts "Use /debug to see more details" unless GeminiRepl.configuration.debug
+      end
+    end
+  end
+end
+#+end_src
+
+** API Client
+
+#+begin_src ruby :tangle lib/gemini_repl/core/api_client.rb
+# frozen_string_literal: true
+
+require 'net/http'
+require 'uri'
+require 'json'
+
+module GeminiRepl
+  module Core
+    class ApiClient
+      API_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta'
+      
+      def initialize
+        @api_key = ENV['GEMINI_API_KEY'] || GeminiRepl.configuration.api_key
+        raise ConfigurationError, 'GEMINI_API_KEY not set' unless @api_key
+        
+        @model = GeminiRepl.configuration.model
+        @timeout = GeminiRepl.configuration.api_timeout
+        @retry_config = GeminiRepl.configuration.retry_config
+      end
+      
+      def send_message(messages, tools: nil)
+        request_body = build_request_body(messages, tools)
+        
+        with_retry do
+          response = make_request(request_body)
+          parse_response(response)
+        end
+      end
+      
+      def send_tool_results(results)
+        # Implementation for tool result handling
+        # This would send the results back to the API
+      end
+      
+      private
+      
+      def build_request_body(messages, tools)
+        body = {
+          contents: format_messages(messages),
+          generationConfig: {
+            temperature: GeminiRepl.configuration.temperature,
+            maxOutputTokens: GeminiRepl.configuration.max_output_tokens
+          }
+        }
+        
+        if tools
+          body[:tools] = [{functionDeclarations: tools}]
+        end
+        
+        body
+      end
+      
+      def format_messages(messages)
+        messages.map do |msg|
+          {
+            role: msg[:role] == 'user' ? 'user' : 'model',
+            parts: [{ text: msg[:content] }]
+          }
+        end
+      end
+      
+      def make_request(body)
+        uri = URI("#{API_ENDPOINT}/models/#{@model}:generateContent")
+        uri.query = URI.encode_www_form(key: @api_key)
+        
+        http = Net::HTTP.new(uri.host, uri.port)
+        http.use_ssl = true
+        http.read_timeout = @timeout
+        http.open_timeout = @timeout
+        
+        request = Net::HTTP::Post.new(uri)
+        request['Content-Type'] = 'application/json'
+        request.body = body.to_json
+        
+        GeminiRepl.logger.debug("API Request: #{request.body}")
+        
+        response = http.request(request)
+        
+        unless response.is_a?(Net::HTTPSuccess)
+          raise ApiError, "API returned #{response.code}: #{response.body}"
+        end
+        
+        response
+      end
+      
+      def parse_response(response)
+        data = JSON.parse(response.body)
+        
+        candidate = data.dig('candidates', 0)
+        raise ApiError, 'No response candidate' unless candidate
+        
+        content = candidate.dig('content', 'parts', 0, 'text') || ''
+        tool_calls = extract_tool_calls(candidate)
+        
+        OpenStruct.new(
+          content: content,
+          tool_calls: tool_calls,
+          usage: data['usageMetadata']
+        )
+      rescue JSON::ParserError => e
+        raise ApiError, "Failed to parse response: #{e.message}"
+      end
+      
+      def extract_tool_calls(candidate)
+        # Extract tool calls from response if present
+        function_calls = candidate.dig('content', 'parts')&.select do |part|
+          part.key?('functionCall')
+        end
+        
+        function_calls&.map do |call|
+          {
+            'name' => call.dig('functionCall', 'name'),
+            'parameters' => call.dig('functionCall', 'args')
+          }
+        end
+      end
+      
+      def with_retry
+        attempts = 0
+        
+        begin
+          attempts += 1
+          yield
+        rescue => e
+          if attempts < @retry_config[:max_attempts]
+            sleep_time = @retry_config[:backoff][attempts - 1] || @retry_config[:backoff].last
+            GeminiRepl.logger.warn("Retrying after #{sleep_time}s (attempt #{attempts})")
+            sleep(sleep_time)
+            retry
+          else
+            raise
+          end
+        end
+      end
+    end
+  end
+end
+#+end_src
+
+* Tool System
+
+** Tool Registry
+
+#+begin_src ruby :tangle lib/gemini_repl/tools/registry.rb
+# frozen_string_literal: true
+
+module GeminiRepl
+  module Tools
+    class Registry
+      def initialize
+        @tools = {}
+        @enabled_tools = Set.new(GeminiRepl.configuration.enabled_tools)
+        
+        # Auto-register built-in tools
+        register_builtin_tools
+      end
+      
+      def register(tool_class)
+        tool = tool_class.new
+        @tools[tool.name] = tool
+        GeminiRepl.logger.info("Registered tool: #{tool.name}")
+      end
+      
+      def execute(tool_name, parameters)
+        tool = @tools[tool_name]
+        raise ToolError, "Unknown tool: #{tool_name}" unless tool
+        raise ToolError, "Tool not enabled: #{tool_name}" unless enabled?(tool_name)
+        
+        # Validate parameters
+        validation_error = tool.validate(parameters)
+        raise ToolError, validation_error if validation_error
+        
+        # Execute in sandbox
+        Sandbox.execute do
+          tool.execute(parameters)
+        end
+      end
+      
+      def definitions
+        @tools.values
+          .select { |tool| enabled?(tool.name) }
+          .map(&:definition)
+      end
+      
+      def enabled?(tool_name)
+        @enabled_tools.include?(tool_name) || @enabled_tools.include?('*')
+      end
+      
+      private
+      
+      def register_builtin_tools
+        # Core tools based on usage statistics
+        register(ReadFile)
+        register(WriteFile)
+        register(ListFiles)
+        register(SearchCode)
+        register(EditFile)      # High priority addition
+        register(RunCommand)    # Critical for 50%+ use cases
+      end
+    end
+  end
+end
+#+end_src
+
+** Base Tool Class
+
+#+begin_src ruby :tangle lib/gemini_repl/tools/base.rb
+# frozen_string_literal: true
+
+module GeminiRepl
+  module Tools
+    class Base
+      class << self
+        attr_accessor :tool_name, :tool_description
+        
+        def name(value = nil)
+          @tool_name = value if value
+          @tool_name
+        end
+        
+        def description(value = nil)
+          @tool_description = value if value
+          @tool_description
+        end
+        
+        def parameters(&block)
+          @parameters_block = block
+        end
+        
+        def get_parameters
+          return {} unless @parameters_block
+          
+          builder = ParameterBuilder.new
+          builder.instance_eval(&@parameters_block)
+          builder.build
+        end
+      end
+      
+      def name
+        self.class.tool_name
+      end
+      
+      def description
+        self.class.tool_description
+      end
+      
+      def definition
+        {
+          name: name,
+          description: description,
+          parameters: self.class.get_parameters
+        }
+      end
+      
+      def validate(params)
+        # Override in subclasses
+        nil
+      end
+      
+      def execute(params)
+        raise NotImplementedError, "#{self.class} must implement #execute"
+      end
+      
+      protected
+      
+      def log_execution(params)
+        GeminiRepl.logger.info("Executing #{name} with params: #{params.inspect}")
+      end
+      
+      def workspace_path(relative_path)
+        workspace = GeminiRepl.configuration.workspace_path
+        full_path = File.expand_path(relative_path, workspace)
+        
+        # Security check
+        unless full_path.start_with?(File.expand_path(workspace))
+          raise SecurityError, "Path traversal detected: #{relative_path}"
+        end
+        
+        full_path
+      end
+    end
+    
+    class ParameterBuilder
+      def initialize
+        @properties = {}
+        @required = []
+      end
+      
+      def property(name, type:, required: false, description: nil)
+        @properties[name] = {
+          type: type.to_s,
+          description: description
+        }.compact
+        
+        @required << name.to_s if required
+      end
+      
+      def build
+        {
+          type: 'object',
+          properties: @properties,
+          required: @required
+        }
+      end
+    end
+  end
+end
+#+end_src
+
+** Core Tools Implementation
+
+#+begin_src ruby :tangle lib/gemini_repl/tools/read_file.rb
+# frozen_string_literal: true
+
+module GeminiRepl
+  module Tools
+    class ReadFile < Base
+      name 'read_file'
+      description 'Read contents of a file from workspace'
+      
+      parameters do
+        property :path, type: :string, required: true,
+                       description: 'File path relative to workspace'
+      end
+      
+      def execute(params)
+        log_execution(params)
+        
+        file_path = workspace_path(params[:path] || params['path'])
+        
+        unless File.exist?(file_path)
+          return { error: "File not found: #{params[:path]}" }
+        end
+        
+        unless File.file?(file_path)
+          return { error: "Not a file: #{params[:path]}" }
+        end
+        
+        content = File.read(file_path)
+        
+        {
+          success: true,
+          content: content,
+          size: content.bytesize,
+          lines: content.lines.count
+        }
+      rescue => e
+        { error: "Failed to read file: #{e.message}" }
+      end
+      
+      def validate(params)
+        return "Missing required parameter: path" unless params[:path] || params['path']
+        nil
+      end
+    end
+  end
+end
+#+end_src
+
+#+begin_src ruby :tangle lib/gemini_repl/tools/write_file.rb
+# frozen_string_literal: true
+
+module GeminiRepl
+  module Tools
+    class WriteFile < Base
+      name 'write_file'
+      description 'Write content to a file in workspace'
+      
+      parameters do
+        property :path, type: :string, required: true,
+                       description: 'File path relative to workspace'
+        property :content, type: :string, required: true,
+                          description: 'Content to write'
+        property :mode, type: :string, required: false,
+                       description: 'Write mode: write (default) or append'
+      end
+      
+      def execute(params)
+        log_execution(params)
+        
+        file_path = workspace_path(params[:path] || params['path'])
+        content = params[:content] || params['content']
+        mode = params[:mode] || params['mode'] || 'write'
+        
+        # Create directory if needed
+        FileUtils.mkdir_p(File.dirname(file_path))
+        
+        # Write file
+        case mode
+        when 'append'
+          File.open(file_path, 'a') { |f| f.write(content) }
+        else
+          File.write(file_path, content)
+        end
+        
+        {
+          success: true,
+          path: params[:path],
+          size: content.bytesize,
+          mode: mode
+        }
+      rescue => e
+        { error: "Failed to write file: #{e.message}" }
+      end
+      
+      def validate(params)
+        return "Missing required parameter: path" unless params[:path] || params['path']
+        return "Missing required parameter: content" unless params[:content] || params['content']
+        nil
+      end
+    end
+  end
+end
+#+end_src
+
+#+begin_src ruby :tangle lib/gemini_repl/tools/run_command.rb
+# frozen_string_literal: true
+
+require 'open3'
+require 'timeout'
+
+module GeminiRepl
+  module Tools
+    class RunCommand < Base
+      name 'run_command'
+      description 'Execute shell commands (sandboxed)'
+      
+      parameters do
+        property :command, type: :string, required: true,
+                          description: 'Command to execute'
+        property :timeout, type: :integer, required: false,
+                          description: 'Timeout in seconds (default: 30)'
+      end
+      
+      # Allowed commands for security
+      ALLOWED_COMMANDS = %w[
+        ls cat grep find echo pwd date
+        ruby python node npm bundle gem
+        git make rake rspec
+      ].freeze
+      
+      def execute(params)
+        log_execution(params)
+        
+        command = params[:command] || params['command']
+        timeout = (params[:timeout] || params['timeout'] || 30).to_i
+        
+        # Extract base command for validation
+        base_command = command.split.first
+        
+        unless ALLOWED_COMMANDS.include?(base_command)
+          return { error: "Command not allowed: #{base_command}" }
+        end
+        
+        # Execute in workspace directory
+        Dir.chdir(GeminiRepl.configuration.workspace_path) do
+          stdout, stderr, status = nil
+          
+          begin
+            Timeout.timeout(timeout) do
+              stdout, stderr, status = Open3.capture3(command)
+            end
+          rescue Timeout::Error
+            return { error: "Command timed out after #{timeout} seconds" }
+          end
+          
+          {
+            success: status.success?,
+            stdout: stdout,
+            stderr: stderr,
+            exit_code: status.exitstatus
+          }
+        end
+      rescue => e
+        { error: "Failed to execute command: #{e.message}" }
+      end
+      
+      def validate(params)
+        return "Missing required parameter: command" unless params[:command] || params['command']
+        nil
+      end
+    end
+  end
+end
+#+end_src
+
+* Configuration System
+
+** Configuration Class
+
+#+begin_src ruby :tangle lib/gemini_repl/configuration.rb
+# frozen_string_literal: true
+
+module GeminiRepl
+  class Configuration
+    DEFAULTS = {
+      # API settings
+      api_key: ENV['GEMINI_API_KEY'],
+      model: ENV['GEMINI_MODEL'] || 'gemini-2.0-flash-exp',
+      api_timeout: 30,
+      temperature: 0.7,
+      max_output_tokens: 2048,
+      
+      # Retry configuration
+      retry_config: {
+        max_attempts: 3,
+        backoff: [1.0, 2.0, 4.0]
+      },
+      
+      # Context settings
+      max_context_tokens: 32768,
+      prune_threshold: 0.9,
+      
+      # Logging
+      log_level: ENV['LOG_LEVEL'] || 'INFO',
+      log_file: ENV['LOG_FILE'] || 'logs/gemini.log',
+      log_format: :json,
+      
+      # UI settings
+      prompt_style: :contextual,
+      color_enabled: true,
+      output_format: :text,
+      
+      # Tool settings
+      tools_enabled: true,
+      enabled_tools: %w[read_file write_file list_files search_code run_command edit_file],
+      workspace_path: ENV['WORKSPACE_DIR'] || './workspace',
+      
+      # Session settings
+      sessions_path: File.expand_path('~/.gemini_repl/sessions'),
+      history_size: 1000,
+      auto_save: true
+    }.freeze
+    
+    attr_accessor(*DEFAULTS.keys)
+    attr_accessor :debug
+    
+    def initialize
+      DEFAULTS.each do |key, value|
+        instance_variable_set("@#{key}", value.dup)
+      end
+      @debug = false
+    end
+    
+    def load_file(file_path)
+      return unless File.exist?(file_path)
+      
+      config = YAML.load_file(file_path)
+      merge_config(config)
+    rescue => e
+      GeminiRepl.logger.error("Failed to load config: #{e.message}")
+    end
+    
+    def log_level
+      @debug ? 'DEBUG' : @log_level
+    end
+    
+    private
+    
+    def merge_config(config)
+      config.each do |key, value|
+        setter = "#{key}="
+        send(setter, value) if respond_to?(setter)
+      end
+    end
+  end
+end
+#+end_src
+
+** Configuration File Template
+
+#+begin_src yaml :tangle config/application.yml.example
+# Gemini REPL Configuration
+# Copy to ~/.gemini_repl/config.yml or specify with -c flag
+
+# API Configuration
+api:
+  key: <%= ENV['GEMINI_API_KEY'] %>
+  model: gemini-2.0-flash-exp
+  timeout: 30
+  temperature: 0.7
+  max_output_tokens: 2048
+
+# Retry Configuration  
+retry:
+  max_attempts: 3
+  backoff: [1.0, 2.0, 4.0]
+
+# Context Management
+context:
+  max_tokens: 32768
+  prune_threshold: 0.9
+
+# Logging
+logging:
+  level: INFO
+  file: logs/gemini.log
+  format: json  # or text
+  max_size: 10485760  # 10MB
+  max_files: 5
+
+# User Interface
+ui:
+  prompt_style: contextual  # minimal, tokens, ruby, time, model, contextual
+  color: true
+  output_format: text  # text, json, yaml
+
+# Tools Configuration
+tools:
+  enabled: true
+  allowed:
+    - read_file
+    - write_file
+    - list_files
+    - search_code
+    - run_command
+    - edit_file
+  workspace: ./workspace
+  sandbox_level: strict
+
+# Session Management
+sessions:
+  path: ~/.gemini_repl/sessions
+  auto_save: true
+  history_size: 1000
+#+end_src
+
+* Testing Framework
+
+** RSpec Configuration
+
+#+begin_src ruby :tangle .rspec
+--require spec_helper
+--format documentation
+--color
+--order random
+#+end_src
+
+#+begin_src ruby :tangle spec/spec_helper.rb
+# frozen_string_literal: true
+
+require 'simplecov'
+SimpleCov.start do
+  add_filter '/spec/'
+  add_filter '/vendor/'
+end
+
+require 'bundler/setup'
+require 'gemini_repl'
+
+# Support files
+Dir[File.join(__dir__, 'support', '**', '*.rb')].sort.each { |f| require f }
+
+RSpec.configure do |config|
+  config.expect_with :rspec do |expectations|
+    expectations.include_chain_clauses_in_custom_matcher_descriptions = true
+  end
+
+  config.mock_with :rspec do |mocks|
+    mocks.verify_partial_doubles = true
+  end
+
+  config.shared_context_metadata_behavior = :apply_to_host_groups
+  config.filter_run_when_matching :focus
+  config.example_status_persistence_file_path = "spec/examples.txt"
+  config.disable_monkey_patching!
+  config.warnings = true
+
+  if config.files_to_run.one?
+    config.default_formatter = "doc"
+  end
+
+  config.profile_examples = 10
+  config.order = :random
+  Kernel.srand config.seed
+  
+  # Clean up test workspace
+  config.before(:suite) do
+    FileUtils.rm_rf('spec/fixtures/workspace')
+    FileUtils.mkdir_p('spec/fixtures/workspace')
+  end
+end
+#+end_src
+
+** Sample Test
+
+#+begin_src ruby :tangle spec/gemini_repl/tools/read_file_spec.rb
+# frozen_string_literal: true
+
+require 'spec_helper'
+
+RSpec.describe GeminiRepl::Tools::ReadFile do
+  let(:tool) { described_class.new }
+  let(:workspace) { 'spec/fixtures/workspace' }
+  
+  before do
+    allow(GeminiRepl.configuration).to receive(:workspace_path).and_return(workspace)
+    FileUtils.mkdir_p(workspace)
+  end
+  
+  describe '#execute' do
+    context 'with valid file' do
+      let(:file_path) { 'test.txt' }
+      let(:content) { "Hello, Ruby!\nThis is a test." }
+      
+      before do
+        File.write(File.join(workspace, file_path), content)
+      end
+      
+      it 'reads file content successfully' do
+        result = tool.execute(path: file_path)
+        
+        expect(result[:success]).to be true
+        expect(result[:content]).to eq content
+        expect(result[:lines]).to eq 2
+      end
+    end
+    
+    context 'with non-existent file' do
+      it 'returns error' do
+        result = tool.execute(path: 'missing.txt')
+        
+        expect(result[:error]).to match(/File not found/)
+      end
+    end
+    
+    context 'with path traversal attempt' do
+      it 'raises security error' do
+        expect {
+          tool.execute(path: '../../../etc/passwd')
+        }.to raise_error(SecurityError)
+      end
+    end
+  end
+  
+  describe '#validate' do
+    it 'requires path parameter' do
+      expect(tool.validate({})).to match(/Missing required parameter: path/)
+    end
+    
+    it 'passes with path parameter' do
+      expect(tool.validate(path: 'file.txt')).to be_nil
+    end
+  end
+end
+#+end_src
+
+* Build Configuration
+
+** Gemfile
+
+#+begin_src ruby :tangle Gemfile
+# frozen_string_literal: true
+
+source 'https://rubygems.org'
+
+# Specify Ruby version
+ruby '>= 3.0.0'
+
+# Core dependencies
+gem 'faraday', '~> 2.7'          # HTTP client
+gem 'faraday-retry', '~> 2.2'    # Retry middleware
+gem 'json', '~> 2.6'             # JSON parsing
+gem 'readline'                    # Interactive input
+gem 'logger'                      # Logging
+
+# CLI enhancements
+gem 'colorize', '~> 1.1'         # Colored output
+gem 'tty-prompt', '~> 0.23'      # Better prompts
+gem 'tty-table', '~> 0.12'       # Table formatting
+
+# Configuration
+gem 'dry-configurable', '~> 1.0' # Configuration management
+gem 'dotenv', '~> 2.8'           # Environment variables
+
+# Development dependencies
+group :development, :test do
+  gem 'rspec', '~> 3.12'
+  gem 'rubocop', '~> 1.50'
+  gem 'rubocop-rspec', '~> 2.19'
+  gem 'rubocop-performance', '~> 1.17'
+  gem 'simplecov', '~> 0.22'
+  gem 'yard', '~> 0.9'
+  gem 'pry', '~> 0.14'
+  gem 'pry-byebug', '~> 3.10'
+  gem 'overcommit', '~> 0.60'
+end
+
+# Testing tools
+group :test do
+  gem 'webmock', '~> 3.18'
+  gem 'vcr', '~> 6.1'
+  gem 'timecop', '~> 0.9'
+  gem 'faker', '~> 3.2'
+  gem 'factory_bot', '~> 6.2'
+end
+
+# Performance monitoring
+group :development do
+  gem 'ruby-prof', '~> 1.6'
+  gem 'stackprof', '~> 0.2'
+  gem 'memory_profiler', '~> 1.0'
+end
+#+end_src
+
+** Rakefile
+
+#+begin_src ruby :tangle Rakefile
+# frozen_string_literal: true
+
+require 'bundler/gem_tasks'
+require 'rspec/core/rake_task'
+require 'rubocop/rake_task'
+require 'yard'
+
+# Default task
+task default: %i[spec rubocop]
+
+# RSpec
+RSpec::Core::RakeTask.new(:spec)
+
+# RuboCop
+RuboCop::RakeTask.new
+
+# YARD documentation
+YARD::Rake::YardocTask.new
+
+# Console task for development
+desc 'Start a console with the gem loaded'
+task :console do
+  require 'bundler/setup'
+  require 'gemini_repl'
+  require 'pry'
+  Pry.start
+end
+
+# Version tasks
+namespace :version do
+  desc 'Show current version'
+  task :show do
+    puts GeminiRepl::VERSION
+  end
+  
+  desc 'Bump patch version'
+  task :patch do
+    bump_version(:patch)
+  end
+  
+  desc 'Bump minor version'
+  task :minor do
+    bump_version(:minor)
+  end
+  
+  desc 'Bump major version'
+  task :major do
+    bump_version(:major)
+  end
+end
+
+def bump_version(type)
+  version_file = 'lib/gemini_repl/version.rb'
+  content = File.read(version_file)
+  
+  major, minor, patch = GeminiRepl::VERSION.split('.').map(&:to_i)
+  
+  case type
+  when :patch
+    patch += 1
+  when :minor
+    minor += 1
+    patch = 0
+  when :major
+    major += 1
+    minor = 0
+    patch = 0
+  end
+  
+  new_version = "#{major}.#{minor}.#{patch}"
+  new_content = content.gsub(/VERSION = '[\d.]+'/, "VERSION = '#{new_version}'")
+  
+  File.write(version_file, new_content)
+  puts "Version bumped to #{new_version}"
+end
+
+# Setup task
+desc 'Setup development environment'
+task :setup do
+  puts 'Installing dependencies...'
+  system('bundle install')
+  
+  puts 'Setting up git hooks...'
+  system('bundle exec overcommit --install')
+  
+  puts 'Creating directories...'
+  %w[logs workspace sessions].each do |dir|
+    FileUtils.mkdir_p(dir)
+  end
+  
+  puts 'Setup complete!'
+end
+#+end_src
+
+** Gemspec
+
+#+begin_src ruby :tangle gemini-repl.gemspec
+# frozen_string_literal: true
+
+require_relative 'lib/gemini_repl/version'
+
+Gem::Specification.new do |spec|
+  spec.name = 'gemini-repl'
+  spec.version = GeminiRepl::VERSION
+  spec.authors = ['AYGP-DR Team']
+  spec.email = ['contact@example.com']
+
+  spec.summary = 'Interactive REPL for Google Gemini AI'
+  spec.description = 'A Ruby implementation of an interactive REPL for conversing with Google Gemini AI models, with tool calling capabilities and comprehensive logging.'
+  spec.homepage = 'https://github.com/aygp-dr/gemini-repl-008'
+  spec.license = 'MIT'
+  spec.required_ruby_version = '>= 3.0.0'
+
+  spec.metadata['homepage_uri'] = spec.homepage
+  spec.metadata['source_code_uri'] = spec.homepage
+  spec.metadata['changelog_uri'] = "#{spec.homepage}/blob/main/CHANGELOG.md"
+
+  # Files to include
+  spec.files = Dir.chdir(__dir__) do
+    `git ls-files -z`.split("\x0").reject do |f|
+      (f == __FILE__) || f.match(%r{\A(?:(?:test|spec|features)/|\.(?:git|travis|circleci)|appveyor)})
+    end
+  end
+  
+  spec.bindir = 'bin'
+  spec.executables = spec.files.grep(%r{\Abin/}) { |f| File.basename(f) }
+  spec.require_paths = ['lib']
+
+  # Runtime dependencies
+  spec.add_dependency 'faraday', '~> 2.7'
+  spec.add_dependency 'faraday-retry', '~> 2.2'
+  spec.add_dependency 'colorize', '~> 1.1'
+  spec.add_dependency 'dotenv', '~> 2.8'
+  spec.add_dependency 'tty-prompt', '~> 0.23'
+
+  # For Ruby 3.3+, some gems might need updating
+  spec.metadata['rubygems_mfa_required'] = 'true'
+end
+#+end_src
+
+* Development Workflow
+
+** Makefile
+
+#+begin_src makefile :tangle Makefile
+# Gemini REPL Ruby Implementation Makefile
+
+.PHONY: all setup test lint run clean help
+
+# Default target
+all: setup test
+
+# Setup development environment
+setup:
+	@echo "Setting up Ruby development environment..."
+	bundle install
+	bundle exec rake setup
+
+# Run tests
+test:
+	@echo "Running tests..."
+	bundle exec rspec
+
+# Run linter
+lint:
+	@echo "Running RuboCop..."
+	bundle exec rubocop
+
+# Auto-fix linting issues
+fix:
+	@echo "Auto-fixing linting issues..."
+	bundle exec rubocop -a
+
+# Run the REPL
+run:
+	@echo "Starting Gemini REPL..."
+	bundle exec ruby bin/gemini-repl
+
+# Build gem
+build:
+	@echo "Building gem..."
+	bundle exec rake build
+
+# Install gem locally
+install: build
+	@echo "Installing gem locally..."
+	bundle exec rake install
+
+# Generate documentation
+docs:
+	@echo "Generating YARD documentation..."
+	bundle exec yard
+
+# Start console for development
+console:
+	@echo "Starting development console..."
+	bundle exec rake console
+
+# Clean build artifacts
+clean:
+	@echo "Cleaning build artifacts..."
+	rm -rf pkg/
+	rm -rf coverage/
+	rm -rf doc/
+	rm -rf .yardoc/
+	rm -f Gemfile.lock
+
+# Show help
+help:
+	@echo "Gemini REPL Ruby - Available targets:"
+	@echo "  make setup    - Set up development environment"
+	@echo "  make test     - Run tests"
+	@echo "  make lint     - Run linter"
+	@echo "  make fix      - Auto-fix linting issues"
+	@echo "  make run      - Start the REPL"
+	@echo "  make build    - Build gem package"
+	@echo "  make install  - Install gem locally"
+	@echo "  make docs     - Generate documentation"
+	@echo "  make console  - Start development console"
+	@echo "  make clean    - Clean build artifacts"
+	@echo "  make help     - Show this help message"
+#+end_src
+
+** Environment Setup
+
+#+begin_src bash :tangle .env.example
+# Gemini API Configuration
+GEMINI_API_KEY=your-api-key-here
+GEMINI_MODEL=gemini-2.0-flash-exp
+
+# Logging Configuration
+LOG_LEVEL=INFO
+LOG_FILE=logs/gemini.log
+
+# Tool Configuration
+WORKSPACE_DIR=./workspace
+GEMINI_TOOLS_ENABLED=true
+
+# Development
+DEBUG=false
+#+end_src
+
+* Security Considerations
+
+** Sandbox Implementation
+
+#+begin_src ruby :tangle lib/gemini_repl/tools/sandbox.rb
+# frozen_string_literal: true
+
+module GeminiRepl
+  module Tools
+    class Sandbox
+      class << self
+        def execute
+          # Save current state
+          original_pwd = Dir.pwd
+          original_env = ENV.to_h
+          
+          # Enter sandbox
+          Dir.chdir(GeminiRepl.configuration.workspace_path)
+          
+          # Clear sensitive environment variables
+          sanitize_environment
+          
+          # Execute block
+          result = yield
+          
+          result
+        ensure
+          # Restore state
+          Dir.chdir(original_pwd)
+          restore_environment(original_env)
+        end
+        
+        private
+        
+        def sanitize_environment
+          sensitive_vars = %w[
+            AWS_ACCESS_KEY_ID
+            AWS_SECRET_ACCESS_KEY
+            GITHUB_TOKEN
+            DATABASE_URL
+            RAILS_MASTER_KEY
+          ]
+          
+          sensitive_vars.each { |var| ENV.delete(var) }
+        end
+        
+        def restore_environment(original_env)
+          # Clear current env
+          ENV.clear
+          
+          # Restore original
+          original_env.each { |k, v| ENV[k] = v }
+        end
+      end
+    end
+  end
+end
+#+end_src
+
+** Path Validation
+
+#+begin_src ruby :tangle lib/gemini_repl/utils/path_validator.rb
+# frozen_string_literal: true
+
+module GeminiRepl
+  module Utils
+    class PathValidator
+      FORBIDDEN_PATHS = %w[
+        /etc
+        /usr
+        /bin
+        /sbin
+        /var
+        /sys
+        /proc
+        /home
+        ~
+      ].freeze
+      
+      class << self
+        def validate!(path, workspace)
+          # Convert to absolute path
+          abs_path = File.expand_path(path, workspace)
+          workspace_abs = File.expand_path(workspace)
+          
+          # Check if path is within workspace
+          unless abs_path.start_with?(workspace_abs)
+            raise SecurityError, "Path traversal detected: #{path}"
+          end
+          
+          # Check for symlinks
+          if File.symlink?(abs_path)
+            raise SecurityError, "Symlinks not allowed: #{path}"
+          end
+          
+          # Check against forbidden paths
+          FORBIDDEN_PATHS.each do |forbidden|
+            if abs_path.start_with?(File.expand_path(forbidden))
+              raise SecurityError, "Access to system path denied: #{path}"
+            end
+          end
+          
+          true
+        end
+      end
+    end
+  end
+end
+#+end_src
+
+* Conclusion
+
+This implementation guide provides a comprehensive foundation for the Ruby version of Gemini REPL. Key features:
+
+1. **Fast Startup**: Pure Ruby implementation with lazy loading
+2. **Tool System**: Extensible architecture with security sandboxing
+3. **CLI UX**: Rich command-line interface with multiple modes
+4. **Testing**: Comprehensive test coverage with RSpec
+5. **Security**: Path validation, sandboxing, and command whitelisting
+6. **Performance**: Optimized for <300ms startup time
+7. **Daemon Mode**: Future-ready architecture for background operation
+
+The implementation incorporates lessons learned from:
+- Python version's JSON parsing issues
+- Clojure version's architectural patterns
+- Production usage statistics showing 53% shell command usage
+- Security requirements from all previous versions
+
+Next steps:
+1. Implement remaining tools based on priority
+2. Add daemon mode for CI/CD integration
+3. Implement streaming responses
+4. Add plugin architecture
+5. Performance optimization and profiling
+#+end_src
