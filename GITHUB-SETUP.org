@@ -1,0 +1,488 @@
+#+TITLE: GitHub Setup for Gemini REPL 008 (Ruby)
+#+AUTHOR: AYGP-DR Team
+#+DATE: 2025-07-24
+
+* Overview
+
+This document outlines the GitHub setup process for gemini-repl-008, including labels, milestones, and project structure. All items should be created before implementation begins to enable proper issue tracking and documentation references.
+
+* Repository Settings
+
+** Basic Information
+- *Name*: gemini-repl-008
+- *Description*: Ruby implementation of Gemini REPL with AI tool calling capabilities
+- *Topics*: ruby, gemini, repl, ai, tool-calling, cli, literate-programming
+- *Website*: https://github.com/aygp-dr/gemini-repl-008
+- *Wiki*: Enabled
+- *Issues*: Enabled
+- *Projects*: Enabled
+- *Discussions*: Enabled
+
+** Branch Protection
+- *Main branch*: Require pull request reviews
+- *Require status checks*: CI must pass
+- *Dismiss stale reviews*: When new commits are pushed
+- *Include administrators*: Yes
+
+* GitHub Labels
+
+Create these labels for consistent issue tracking:
+
+** Type Labels
+| Label | Color | Description |
+|-------+-------+-------------|
+| type:bug | #d73a4a | Something isn't working |
+| type:feature | #0075ca | New feature or request |
+| type:enhancement | #a2eeef | Improvement to existing functionality |
+| type:documentation | #0052cc | Documentation improvements |
+| type:test | #d4c5f9 | Testing related issues |
+| type:refactor | #fbca04 | Code refactoring |
+| type:performance | #84b6eb | Performance improvements |
+| type:security | #ee0701 | Security issues or improvements |
+
+** Priority Labels
+| Label | Color | Description |
+|-------+-------+-------------|
+| priority:critical | #b60205 | Critical priority - block release |
+| priority:high | #ff9f1c | High priority |
+| priority:medium | #ffcc00 | Medium priority |
+| priority:low | #c5def5 | Low priority |
+
+** Status Labels
+| Label | Color | Description |
+|-------+-------+-------------|
+| status:in-progress | #1d76db | Work in progress |
+| status:blocked | #d93f0b | Blocked by external factors |
+| status:needs-review | #006b75 | Needs code review |
+| status:ready | #0e8a16 | Ready for implementation |
+| status:wont-fix | #ffffff | Will not be fixed |
+
+** Component Labels
+| Label | Color | Description |
+|-------+-------+-------------|
+| component:api | #5319e7 | API client related |
+| component:cli | #fbca04 | CLI interface |
+| component:tools | #b58900 | Tool system |
+| component:repl | #0e8a16 | REPL core functionality |
+| component:daemon | #1d76db | Daemon mode |
+| component:config | #c5def5 | Configuration system |
+
+** Other Labels
+| Label | Color | Description |
+|-------+-------+-------------|
+| good-first-issue | #7057ff | Good for newcomers |
+| help-wanted | #008672 | Extra attention is needed |
+| experiment | #d876e3 | Experimental feature |
+| breaking-change | #b60205 | Breaking change |
+| dependencies | #0366d6 | Dependency updates |
+
+* GitHub Milestones
+
+Create these milestones in order:
+
+** v0.1.0 - MVP Release
+- *Due Date*: 2025-08-15
+- *Description*: Minimal viable product with core REPL functionality
+- *Goals*:
+  - [ ] Basic REPL loop working
+  - [ ] Gemini API integration
+  - [ ] Core slash commands
+  - [ ] Basic file tools (read/write)
+  - [ ] Session management
+  - [ ] Error handling
+  - [ ] Initial documentation
+
+** v0.2.0 - Tool System
+- *Due Date*: 2025-08-30
+- *Description*: Complete tool system implementation
+- *Goals*:
+  - [ ] All 6 core tools implemented
+  - [ ] Tool sandboxing complete
+  - [ ] Tool validation framework
+  - [ ] Tool documentation
+  - [ ] Integration tests for tools
+
+** v0.3.0 - Enhanced CLI
+- *Due Date*: 2025-09-15
+- *Description*: CLI improvements and daemon mode
+- *Goals*:
+  - [ ] Daemon mode implementation
+  - [ ] Enhanced CLI arguments
+  - [ ] Print mode optimization
+  - [ ] Session management improvements
+  - [ ] Performance optimizations
+
+** v0.4.0 - Production Features
+- *Due Date*: 2025-09-30
+- *Description*: Production-ready features
+- *Goals*:
+  - [ ] Streaming responses
+  - [ ] Plugin architecture design
+  - [ ] Advanced configuration
+  - [ ] Comprehensive logging
+  - [ ] Security audit complete
+
+** v0.5.0 - Beta Release
+- *Due Date*: 2025-10-15
+- *Description*: Beta release with all planned features
+- *Goals*:
+  - [ ] All planned features complete
+  - [ ] Performance targets met
+  - [ ] Cross-platform testing
+  - [ ] Documentation complete
+  - [ ] Community feedback incorporated
+
+** v1.0.0 - Stable Release
+- *Due Date*: 2025-11-01
+- *Description*: First stable release
+- *Goals*:
+  - [ ] Production ready
+  - [ ] Security review complete
+  - [ ] Performance optimized
+  - [ ] Full test coverage
+  - [ ] Published to RubyGems
+
+* Initial Issues to Create
+
+** Critical Path Issues (v0.1.0)
+
+#+begin_example
+Title: Implement basic REPL loop with Readline
+Labels: type:feature, priority:critical, component:repl, status:ready
+Milestone: v0.1.0
+Description:
+Implement the core REPL loop using Ruby's Readline library.
+
+Acceptance Criteria:
+- [ ] Interactive prompt accepts input
+- [ ] Command history with arrow keys
+- [ ] Tab completion for commands
+- [ ] Graceful exit handling
+- [ ] Error recovery
+
+References:
+- RUBY-GEMINI-REPL.org#core-repl-implementation
+#+end_example
+
+#+begin_example
+Title: Implement Gemini API client with Faraday
+Labels: type:feature, priority:critical, component:api, status:ready
+Milestone: v0.1.0
+Description:
+Create the API client for Gemini using Faraday with retry logic.
+
+Acceptance Criteria:
+- [ ] Basic API calls working
+- [ ] Retry logic implemented
+- [ ] Error handling
+- [ ] Token counting
+- [ ] Response parsing
+
+References:
+- REQUIREMENTS.org#api-client-specifications
+- Issue #1 from gemini-repl-007 (API parameter fixes)
+#+end_example
+
+** Tool System Issues (v0.2.0)
+
+#+begin_example
+Title: Implement file operation tools with sandboxing
+Labels: type:feature, priority:high, component:tools
+Milestone: v0.2.0
+Description:
+Implement read_file, write_file, and list_files tools with security sandboxing.
+
+Acceptance Criteria:
+- [ ] Path traversal prevention
+- [ ] Workspace isolation
+- [ ] Error handling
+- [ ] Tool registration system
+- [ ] Parameter validation
+
+References:
+- RUBY-GEMINI-REPL.org#tool-system
+- Issue #30 from gemini-repl-007 (tool categories)
+#+end_example
+
+#+begin_example
+Title: Add run_command tool for shell execution
+Labels: type:feature, priority:critical, component:tools
+Milestone: v0.2.0
+Description:
+Implement run_command tool (53% of usage based on statistics).
+
+Acceptance Criteria:
+- [ ] Command whitelisting
+- [ ] Timeout handling
+- [ ] Output capture
+- [ ] Security sandbox
+- [ ] Error handling
+
+Note: This addresses the #1 missing feature from production usage stats.
+#+end_example
+
+** Daemon Mode Issues (v0.3.0)
+
+#+begin_example
+Title: Implement daemon mode for CI/CD integration
+Labels: type:feature, priority:high, component:daemon, experiment
+Milestone: v0.3.0
+Description:
+Add daemon mode based on gemini-repl-007 issue #14 design.
+
+Acceptance Criteria:
+- [ ] Background process management
+- [ ] Socket communication
+- [ ] PID file handling
+- [ ] Session persistence
+- [ ] Clean shutdown
+
+References:
+- Issue #14 from gemini-repl-007
+- RUBY-GEMINI-REPL.org#cli-implementation
+#+end_example
+
+** Documentation Issues
+
+#+begin_example
+Title: Create comprehensive user guide
+Labels: type:documentation, priority:high, good-first-issue
+Milestone: v0.1.0
+Description:
+Write user-facing documentation covering all features.
+
+Sections needed:
+- [ ] Installation guide
+- [ ] Quick start tutorial
+- [ ] Command reference
+- [ ] Tool documentation
+- [ ] Configuration guide
+- [ ] Troubleshooting
+
+References:
+- README.org
+- REQUIREMENTS.org
+#+end_example
+
+** Performance Issues
+
+#+begin_example
+Title: Optimize startup time to <300ms
+Labels: type:performance, priority:medium, component:repl
+Milestone: v0.4.0
+Description:
+Ensure REPL starts in under 300ms as specified.
+
+Tasks:
+- [ ] Profile startup sequence
+- [ ] Implement lazy loading
+- [ ] Optimize require statements
+- [ ] Benchmark against target
+- [ ] Document optimization techniques
+
+References:
+- REQUIREMENTS.org#performance-requirements
+#+end_example
+
+** Security Issues
+
+#+begin_example
+Title: Security audit for tool system
+Labels: type:security, priority:critical, component:tools
+Milestone: v0.4.0
+Description:
+Complete security audit of tool sandboxing.
+
+Checklist:
+- [ ] Path traversal tests
+- [ ] Command injection tests
+- [ ] Resource exhaustion tests
+- [ ] Privilege escalation tests
+- [ ] Security documentation
+
+References:
+- RUBY-GEMINI-REPL.org#security-considerations
+#+end_example
+
+* Project Board Setup
+
+Create a project board with these columns:
+
+1. *Backlog* - All issues not yet started
+2. *Ready* - Issues ready for development
+3. *In Progress* - Active development
+4. *In Review* - Code review/testing
+5. *Done* - Completed issues
+
+Automation rules:
+- Issues moved to "In Progress" when assigned
+- Issues moved to "In Review" when PR opened
+- Issues moved to "Done" when PR merged
+- Issues auto-close when PR merged with "Fixes #N"
+
+* GitHub Actions Workflows
+
+** CI Workflow
+Location: `.github/workflows/ci.yml`
+
+Triggers on:
+- Push to main
+- Pull requests
+- Schedule (daily security check)
+
+Jobs:
+1. Lint (RuboCop)
+2. Test (RSpec) - Multiple Ruby versions
+3. Security (bundle-audit)
+4. Coverage (SimpleCov)
+
+** Release Workflow
+Location: `.github/workflows/release.yml`
+
+Triggers on:
+- Version tags (v*)
+
+Jobs:
+1. Build gem
+2. Run tests
+3. Publish to RubyGems
+4. Create GitHub release
+5. Update documentation
+
+* Issue Templates
+
+** Bug Report
+Location: `.github/ISSUE_TEMPLATE/bug_report.md`
+
+#+begin_src markdown
+---
+name: Bug report
+about: Create a report to help us improve
+title: ''
+labels: 'type:bug'
+assignees: ''
+---
+
+**Describe the bug**
+A clear and concise description of what the bug is.
+
+**To Reproduce**
+Steps to reproduce the behavior:
+1. Start REPL with '...'
+2. Type command '...'
+3. See error
+
+**Expected behavior**
+What you expected to happen.
+
+**Actual behavior**
+What actually happened.
+
+**Environment:**
+- OS: [e.g. macOS 13.0, Ubuntu 22.04]
+- Ruby version: [e.g. 3.2.0]
+- Gemini REPL version: [e.g. 0.1.0]
+
+**Additional context**
+Add any other context about the problem here.
+#+end_src
+
+** Feature Request
+Location: `.github/ISSUE_TEMPLATE/feature_request.md`
+
+#+begin_src markdown
+---
+name: Feature request
+about: Suggest an idea for this project
+title: ''
+labels: 'type:feature'
+assignees: ''
+---
+
+**Is your feature request related to a problem?**
+A clear description of the problem.
+
+**Describe the solution you'd like**
+What you want to happen.
+
+**Describe alternatives you've considered**
+Other solutions you've thought about.
+
+**Additional context**
+Any other context or screenshots.
+#+end_src
+
+* Pull Request Template
+
+Location: `.github/pull_request_template.md`
+
+#+begin_src markdown
+## Description
+Brief description of changes.
+
+## Type of change
+- [ ] Bug fix (non-breaking change)
+- [ ] New feature (non-breaking change)
+- [ ] Breaking change
+- [ ] Documentation update
+
+## Checklist
+- [ ] Tests pass locally
+- [ ] Code follows style guidelines
+- [ ] Self-review completed
+- [ ] Documentation updated
+- [ ] CHANGELOG updated
+
+## Related Issues
+Fixes #(issue number)
+
+## Screenshots (if applicable)
+Add screenshots to help explain your changes.
+#+end_src
+
+* References and Cross-Links
+
+When creating issues and documentation, use these references:
+
+1. *Lessons from gemini-repl-007*:
+   - Issue #1: API parameter errors → Our API client design
+   - Issue #14: Daemon mode → Our v0.3.0 milestone
+   - Issue #30: Tool statistics → Our tool priorities
+
+2. *Documentation sections*:
+   - `REQUIREMENTS.org#section-name` for requirements
+   - `RUBY-GEMINI-REPL.org#section-name` for implementation
+   - `README.org#section-name` for user guide
+
+3. *Commit message format*:
+   ```
+   type(scope): description
+   
+   Longer explanation if needed.
+   
+   Refs: #issue-number
+   ```
+
+* Implementation Timeline
+
+| Week | Focus | Milestone | Key Deliverables |
+|------+-------+-----------+------------------|
+| 1 | Foundation | v0.1.0 | REPL loop, API client |
+| 2 | Core Features | v0.1.0 | Commands, sessions |
+| 3 | Tool System | v0.2.0 | File tools, sandbox |
+| 4 | Tools Complete | v0.2.0 | All 6 tools, tests |
+| 5 | CLI Enhanced | v0.3.0 | Daemon, print mode |
+| 6 | Production | v0.4.0 | Performance, security |
+| 7 | Beta Prep | v0.5.0 | Polish, documentation |
+| 8 | Release | v1.0.0 | RubyGems, announcement |
+
+* Conclusion
+
+This GitHub setup ensures:
+1. Clear issue tracking with consistent labels
+2. Defined milestones with concrete goals
+3. Proper documentation references
+4. Security and quality gates
+5. Community-friendly templates
+
+All items in this document should be created before starting implementation to enable proper project management and documentation cross-references.
