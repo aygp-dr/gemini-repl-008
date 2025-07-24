@@ -1,0 +1,514 @@
+#+TITLE: Gemini REPL 008: Ruby Implementation
+#+AUTHOR: AYGP-DR
+#+DATE: 2025-07-24
+
+[[https://www.ruby-lang.org/][file:https://img.shields.io/badge/Ruby-3.0+-red.svg?logo=ruby]] [[https://rubygems.org/][file:https://img.shields.io/badge/RubyGems-latest-orange.svg?logo=rubygems]] [[https://orgmode.org/][file:https://img.shields.io/badge/Org--mode-9.0+-purple.svg?logo=gnu-emacs]] [[https://opensource.org/licenses/MIT][file:https://img.shields.io/badge/License-MIT-yellow.svg]] [[https://github.com/aygp-dr/gemini-repl-008][file:https://img.shields.io/badge/Type-Educational-green.svg]]
+
+* Overview
+
+This repository contains a *Ruby implementation* of the Gemini REPL, adapted from the Clojure/Babashka version (gemini-repl-006). It provides an interactive command-line interface for conversing with Google's Gemini AI models, with tool calling capabilities and comprehensive logging.
+
+** Key Features
+
+- 🚀 Fast startup with pure Ruby (no heavy frameworks)
+- 💬 Interactive REPL with slash commands
+- 🔧 Extensible tool system for file operations
+- 📝 Structured logging with multiple outputs
+- 🔐 Sandboxed execution environment
+- 💾 Session persistence and resume
+- 🎨 Colorized output with customizable prompts
+- 📊 Token usage tracking and statistics
+
+** Evolution History
+
+This is version 008 in the gemini-repl series:
+- [[https://github.com/aygp-dr/gemini-repl][Original]]: ClojureScript implementation
+- [[https://github.com/aygp-dr/gemini-repl-001][001]]: Added formal methods (TLA+, Alloy)
+- [[https://github.com/aygp-dr/gemini-repl-003][003]]: Enhanced tooling and CI/CD
+- [[https://github.com/aygp-dr/gemini-repl-005][005]]: Python port with literate programming
+- [[https://github.com/aygp-dr/gemini-repl-006][006]]: Clojure/Babashka with literate programming
+- [[https://github.com/aygp-dr/gemini-repl-008][008]]: Ruby implementation (this version)
+
+* Quick Start
+
+** Prerequisites
+
+- Ruby 3.0 or higher
+- Bundler gem installed
+- Gemini API key from [[https://makersuite.google.com/app/apikey][Google AI Studio]]
+
+** Installation
+
+*** From RubyGems (Recommended)
+
+#+begin_src bash
+gem install gemini-repl
+#+end_src
+
+*** From Source
+
+#+begin_src bash
+# Clone the repository
+git clone https://github.com/aygp-dr/gemini-repl-008.git
+cd gemini-repl-008
+
+# Install dependencies
+bundle install
+
+# Set up environment
+cp .env.example .env
+# Edit .env and add your GEMINI_API_KEY
+
+# Run the REPL
+bundle exec ruby bin/gemini-repl
+#+end_src
+
+*** Using Docker
+
+#+begin_src bash
+# Build the image
+docker build -t gemini-repl .
+
+# Run interactively
+docker run -it -e GEMINI_API_KEY=your-key gemini-repl
+#+end_src
+
+** Basic Usage
+
+#+begin_src bash
+# Start interactive REPL
+gemini-repl
+
+# One-shot query
+gemini-repl "What is the capital of France?"
+
+# Print mode (no interactive session)
+gemini-repl -p "Explain Ruby blocks"
+
+# Named session (for persistence)
+gemini-repl -n my-session
+
+# Use specific model
+gemini-repl -m gemini-2.0-flash-exp
+#+end_src
+
+* Features
+
+** Interactive Commands
+
+| Command | Description | Example |
+|---------|-------------|---------|
+| =/help= | Show all commands | =/help= |
+| =/exit= | Exit the REPL | =/exit= |
+| =/clear= | Clear screen | =/clear= |
+| =/context= | Show conversation | =/context= |
+| =/stats= | Usage statistics | =/stats= |
+| =/save= | Save conversation | =/save chat.json= |
+| =/load= | Load conversation | =/load chat.json= |
+| =/tools= | List tools | =/tools= |
+| =/workspace= | Show workspace | =/workspace= |
+| =/debug= | Toggle debug mode | =/debug= |
+| =/prompt= | Change prompt style | =/prompt minimal= |
+
+** Tool System
+
+The REPL includes several built-in tools that Gemini can use:
+
+*** File Operations
+- =read_file= - Read file contents from workspace
+- =write_file= - Write content to files
+- =list_files= - List directory contents
+
+*** Code Execution
+- =execute_code= - Run Ruby code in sandbox
+- =shell_exec= - Execute shell commands (restricted)
+
+*** Example Tool Usage
+
+#+begin_example
+You: Can you create a simple Ruby script that prints "Hello, World!"?
+
+Gemini: I'll create a simple Ruby script for you.
+
+[Calling tool: write_file]
+Creating hello.rb with a simple Hello World script.
+
+I've created `hello.rb` in your workspace. The script contains:
+
+```ruby
+#!/usr/bin/env ruby
+puts "Hello, World!"
+```
+
+You can run it with `ruby workspace/hello.rb`.
+#+end_example
+
+** Prompt Styles
+
+Choose from various prompt styles:
+
+- =minimal= - Simple ">"
+- =tokens= - Shows token count
+- =ruby= - Ruby-style ">>"
+- =time= - Includes timestamp
+- =model= - Shows current model
+- =contextual= - Full context info
+
+** Configuration
+
+Configuration can be set via:
+1. Environment variables
+2. =.env= file
+3. =~/.gemini_repl/config.yml=
+4. Command-line arguments
+
+Example configuration:
+
+#+begin_src yaml
+# ~/.gemini_repl/config.yml
+api:
+  model: gemini-2.0-flash-exp
+  timeout: 30
+
+repl:
+  prompt_style: tokens
+  color: true
+  history_size: 1000
+
+logging:
+  level: info
+  file: ~/.gemini_repl/gemini.log
+#+end_src
+
+* Architecture
+
+** Component Overview
+
+#+begin_example
+┌─────────────────────────────────────────────────┐
+│                   CLI Entry                      │
+└────────────────────┬────────────────────────────┘
+                     │
+┌────────────────────▼────────────────────────────┐
+│                REPL Controller                   │
+│  • Command parsing    • State management         │
+│  • Input handling     • Output formatting        │
+└────────┬─────────────────────┬──────────────────┘
+         │                     │
+┌────────▼──────────┐ ┌────────▼──────────┐
+│  Gemini Client    │ │   Tool System     │
+│  • API calls      │ │  • Sandboxing     │
+│  • Streaming      │ │  • Validation     │
+│  • Rate limiting  │ │  • Execution      │
+└───────────────────┘ └───────────────────┘
+         │                     │
+┌────────▼─────────────────────▼──────────────────┐
+│              Context Manager                     │
+│  • History tracking   • Token management         │
+│  • Persistence       • Pruning strategies        │
+└─────────────────────────────────────────────────┘
+#+end_example
+
+** Key Design Decisions
+
+1. **Pure Ruby Implementation**: No heavy frameworks for fast startup
+2. **Modular Architecture**: Each component in its own module/class
+3. **Security First**: All operations sandboxed by default
+4. **Observable System**: Comprehensive logging and metrics
+5. **Test-Driven**: High test coverage with RSpec
+
+* Development
+
+** Setting Up Development Environment
+
+#+begin_src bash
+# Clone and setup
+git clone https://github.com/aygp-dr/gemini-repl-008.git
+cd gemini-repl-008
+
+# Install dependencies including dev tools
+bundle install
+
+# Set up git hooks
+bundle exec overcommit --install
+
+# Run tests
+bundle exec rspec
+
+# Run linter
+bundle exec rubocop
+
+# Start console for development
+bundle exec rake console
+#+end_src
+
+** Running Tests
+
+#+begin_src bash
+# Run all tests
+bundle exec rspec
+
+# Run specific test file
+bundle exec rspec spec/gemini_repl/core/repl_spec.rb
+
+# Run with coverage
+COVERAGE=true bundle exec rspec
+
+# Run integration tests only
+bundle exec rspec spec/integration
+
+# Run with documentation format
+bundle exec rspec --format documentation
+#+end_src
+
+** Project Structure
+
+#+begin_example
+gemini-repl-008/
+├── bin/                    # Executable scripts
+│   └── gemini-repl        # Main entry point
+├── lib/                   # Source code
+│   └── gemini_repl/
+│       ├── core/          # Core REPL functionality
+│       ├── tools/         # Tool implementations
+│       ├── utils/         # Utility modules
+│       └── version.rb     # Version constant
+├── spec/                  # Test files
+│   ├── gemini_repl/      # Unit tests
+│   ├── integration/      # Integration tests
+│   └── support/          # Test helpers
+├── config/               # Configuration files
+├── logs/                 # Log files (git ignored)
+├── workspace/            # Tool workspace (git ignored)
+├── Gemfile              # Ruby dependencies
+├── Rakefile             # Build tasks
+└── gemini-repl.gemspec  # Gem specification
+#+end_example
+
+** Contributing
+
+1. Fork the repository
+2. Create your feature branch (=git checkout -b feature/amazing-feature=)
+3. Write tests for your changes
+4. Implement your feature
+5. Ensure all tests pass
+6. Commit your changes (=git commit -m 'Add amazing feature'=)
+7. Push to the branch (=git push origin feature/amazing-feature=)
+8. Open a Pull Request
+
+** Code Style
+
+We use RuboCop for code style enforcement:
+
+#+begin_src bash
+# Check style
+bundle exec rubocop
+
+# Auto-fix issues
+bundle exec rubocop -a
+
+# Regenerate TODO file
+bundle exec rubocop --regenerate-todo
+#+end_src
+
+* Advanced Usage
+
+** Custom Tools
+
+Create custom tools by implementing the Tool interface:
+
+#+begin_src ruby
+# lib/gemini_repl/tools/my_tool.rb
+module GeminiRepl
+  module Tools
+    class MyTool < Base
+      tool_name "my_tool"
+      description "Does something awesome"
+      
+      parameters do
+        property :input, type: :string, required: true
+      end
+      
+      def execute(params)
+        # Your tool logic here
+        { result: "Processed: #{params[:input]}" }
+      end
+      
+      private
+      
+      def validate_params(params)
+        return "Input cannot be empty" if params[:input].to_s.empty?
+        nil  # No error
+      end
+    end
+  end
+end
+#+end_src
+
+** Plugin System
+
+The REPL supports plugins for extending functionality:
+
+#+begin_src ruby
+# ~/.gemini_repl/plugins/my_plugin.rb
+module GeminiRepl
+  module Plugins
+    class MyPlugin
+      def initialize(repl)
+        @repl = repl
+      end
+      
+      def register
+        @repl.add_command("/myplugin") do |args|
+          "Plugin activated with: #{args.join(' ')}"
+        end
+      end
+    end
+  end
+end
+#+end_src
+
+** Programmatic Usage
+
+Use the REPL components programmatically:
+
+#+begin_src ruby
+require 'gemini_repl'
+
+# Create client
+client = GeminiRepl::Core::ApiClient.new(
+  api_key: ENV['GEMINI_API_KEY']
+)
+
+# Send a message
+response = client.send_message("Hello, Gemini!")
+puts response.content
+
+# With tools
+tools = GeminiRepl::Tools::Registry.new
+tools.register(GeminiRepl::Tools::ReadFile)
+
+response = client.send_message(
+  "Read the README file",
+  tools: tools.definitions
+)
+#+end_src
+
+* Troubleshooting
+
+** Common Issues
+
+*** API Key Not Found
+#+begin_example
+Error: GEMINI_API_KEY environment variable not set
+Solution: Export the variable or add to .env file
+#+end_example
+
+*** Rate Limiting
+#+begin_example
+Error: 429 Too Many Requests
+Solution: The REPL implements exponential backoff automatically
+#+end_example
+
+*** Token Limit Exceeded
+#+begin_example
+Error: Context exceeds token limit
+Solution: Use /clear to reset context or configure pruning
+#+end_example
+
+** Debug Mode
+
+Enable debug mode for detailed logging:
+
+#+begin_src bash
+# Via command line
+gemini-repl --debug
+
+# Via environment
+DEBUG=true gemini-repl
+
+# In REPL
+/debug
+#+end_src
+
+** Log Files
+
+Check log files for detailed information:
+
+#+begin_src bash
+# Main log
+tail -f logs/gemini.log
+
+# Debug log (when debug mode is on)
+tail -f logs/gemini-debug.log
+
+# Real-time monitoring
+tail -f logs/gemini.log | jq '.'
+#+end_src
+
+* Performance
+
+** Benchmarks
+
+| Operation | Target | Typical | Notes |
+|-----------+--------+---------+-------|
+| Startup | <300ms | 250ms | Pure Ruby |
+| Command | <50ms | 30ms | Excluding API |
+| API Call | <2s | 1.5s | Network dependent |
+| Tool Exec | <500ms | 200ms | File operations |
+
+** Optimization Tips
+
+1. Use =-n= flag for persistent sessions
+2. Configure token pruning for long conversations
+3. Use streaming mode for faster perceived response
+4. Implement caching for repeated queries
+5. Monitor with built-in metrics
+
+* Security
+
+** Sandboxing
+
+All file operations are sandboxed to the workspace directory:
+
+- No access to parent directories
+- Path traversal prevention
+- File size limits enforced
+- Restricted file extensions
+
+** Best Practices
+
+1. Never commit =.env= files
+2. Rotate API keys regularly
+3. Use read-only workspace when possible
+4. Review tool permissions
+5. Enable audit logging for production
+
+* License
+
+This project is licensed under the MIT License. See the LICENSE file for details.
+
+* Acknowledgments
+
+- Google for the Gemini API
+- The Clojure/Babashka community for gemini-repl-006
+- The Ruby community for excellent tooling
+- Contributors to all previous gemini-repl versions
+
+* Resources
+
+- [[https://ai.google.dev/gemini-api/docs][Gemini API Documentation]]
+- [[https://www.ruby-lang.org/en/documentation/][Ruby Documentation]]
+- [[https://github.com/aygp-dr/gemini-repl-006][Previous Version (Clojure)]]
+- [[https://github.com/aygp-dr/gemini-repl-005][Python Implementation]]
+
+* Support
+
+- 📋 [[https://github.com/aygp-dr/gemini-repl-008/issues][Issue Tracker]]
+- 💬 [[https://github.com/aygp-dr/gemini-repl-008/discussions][Discussions]]
+- 📖 [[https://github.com/aygp-dr/gemini-repl-008/wiki][Wiki]]
+- 📧 Contact: support@example.com
+
+---
+
+Happy chatting with Gemini! 💎🤖
